@@ -30,8 +30,12 @@ class StringTableEditor:
         self.search_var.trace('w', self.filter_strings)
         ttk.Entry(search_frame, textvariable=self.search_var).pack(side='left', fill='x', expand=True)
         
-        # Create treeview for strings
-        self.tree = ttk.Treeview(self.root, columns=('Index', 'Offset', 'Length', 'String'), show='headings')
+        # Create frame for treeview and scrollbars
+        tree_frame = ttk.Frame(self.root)
+        tree_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Create treeview
+        self.tree = ttk.Treeview(tree_frame, columns=('Index', 'Offset', 'Length', 'String'), show='headings')
         self.tree.heading('Index', text='Index')
         self.tree.heading('Offset', text='Offset')
         self.tree.heading('Length', text='Length')
@@ -40,12 +44,20 @@ class StringTableEditor:
         self.tree.column('Offset', width=100)
         self.tree.column('Length', width=100)
         self.tree.column('String', width=600)
-        self.tree.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(self.root, orient='vertical', command=self.tree.yview)
-        scrollbar.pack(side='right', fill='y')
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        # Add scrollbars
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        # Grid layout
+        self.tree.grid(column=0, row=0, sticky='nsew')
+        vsb.grid(column=1, row=0, sticky='ns')
+        hsb.grid(column=0, row=1, sticky='ew')
+        
+        # Configure grid weights
+        tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_rowconfigure(0, weight=1)
         
         # Bind double-click event
         self.tree.bind('<Double-1>', self.edit_string)
@@ -200,7 +212,7 @@ class StringTableEditor:
         filename = filedialog.askopenfilename(filetypes=[("FCHUNK files", "*.fchunk"), ("All files", "*.*")])
         if not filename:
             return
-            
+        
         try:
             with open(filename, 'rb') as f:
                 self.original_data = f.read()
@@ -222,7 +234,9 @@ class StringTableEditor:
             self.strings, self.string_offsets = self.read_string_table(self.original_data)
             
             # Populate treeview
-            for idx, (string, offset) in enumerate(zip(self.strings, self.string_offsets)):
+            for idx, string_tuple in enumerate(self.strings):
+                string = string_tuple[1] if isinstance(string_tuple, tuple) else string_tuple
+                offset = self.string_offsets[idx]
                 length = (len(string) * 2) + 2
                 self.tree.insert('', 'end', values=(idx, hex(offset), length, string))
             
@@ -240,9 +254,11 @@ class StringTableEditor:
             self.tree.delete(item)
         
         # Repopulate with filtered items
-        for idx, (string, offset) in enumerate(zip(self.strings, self.string_offsets)):
+        for idx, (string_id, string) in enumerate(self.strings):
             if search_term in string.lower():
-                self.tree.insert('', 'end', values=(idx, hex(offset), string))
+                offset = self.string_offsets[idx]
+                length = (len(string) * 2) + 2  # UTF-16LE length + null terminator
+                self.tree.insert('', 'end', values=(idx, hex(offset), length, string))
 
     def edit_string(self, event):
         selection = self.tree.selection()
@@ -288,13 +304,21 @@ class StringTableEditor:
             new_data = bytearray(self.original_data)
             
             # Replace each string at its offset
-            for string, offset in zip(self.strings, self.string_offsets):
-                # Convert string to UTF-16 bytes
-                string_bytes = string.encode('utf-16-le')
+            for idx, offset in enumerate(self.string_offsets):
+                # Get the string, handling both tuple and string cases
+                string_data = self.strings[idx]
+                string = string_data[1] if isinstance(string_data, tuple) else string_data
+                
+                # Convert string to UTF-16 bytes and add null terminator
+                string_bytes = string.encode('utf-16-le') + b'\x00\x00'
+                
                 # Write the string at its offset
                 for i, b in enumerate(string_bytes):
                     if offset + i < len(new_data):
                         new_data[offset + i] = b
+                    else:
+                        print(f"Warning: String at offset 0x{offset:X} exceeds file size")
+                        break
             
             # Write the modified data
             with open(filename, 'wb') as f:
